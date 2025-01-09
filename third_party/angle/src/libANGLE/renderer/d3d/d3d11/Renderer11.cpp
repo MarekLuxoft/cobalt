@@ -13,6 +13,7 @@
 #include <versionhelpers.h>
 #include <sstream>
 
+#include "base/logging.h"
 #include "common/tls.h"
 #include "common/utilities.h"
 #include "libANGLE/Buffer.h"
@@ -516,6 +517,45 @@ Renderer11::~Renderer11()
 #    define D3D11_MESSAGE_ID_DEVICE_DRAW_RENDERTARGETVIEW_NOT_SET ((D3D11_MESSAGE_ID)3146081)
 #endif
 
+using Microsoft::WRL::ComPtr;
+
+void CheckActiveRefreshRate(ComPtr<IDXGIAdapter2> dxgiAdapter, DXGI_FORMAT format, UINT output)
+{
+    // Step 3: Get the first output (Monitor/Display)
+    ComPtr<IDXGIOutput> dxgiOutput;
+    auto hr = dxgiAdapter->EnumOutputs(output, &dxgiOutput);  // Assuming the first output
+    if (FAILED(hr))
+    {
+        LOG(ERROR) << "GOOG-84: Failed to enumerate output. HRESULT: " << hr << " " << output;
+        return;
+    }
+
+    // Step 4: Fallback to enumerate available modes
+    UINT modeCount = 0;
+    hr             = dxgiOutput->GetDisplayModeList(format, 0, &modeCount, nullptr);
+    if (FAILED(hr))
+    {
+        LOG(ERROR) << "GOOG-84: Failed to get display mode list. HRESULT: " << hr << " " << output;
+        return;
+    }
+
+    std::vector<DXGI_MODE_DESC> modes(modeCount);
+    hr = dxgiOutput->GetDisplayModeList(format, 0, &modeCount, modes.data());
+    if (FAILED(hr))
+    {
+        LOG(ERROR) << "GOOG-84: Failed to retrieve display modes. HRESULT: " << hr;
+        return;
+    }
+
+    LOG(ERROR) << "GOOG-84: Available display modes:";
+    for (const auto &mode : modes)
+    {
+        LOG(ERROR) << "GOOG-84: Resolution: " << mode.Width << "x" << mode.Height
+                   << ", Refresh rate: "
+                   << mode.RefreshRate.Numerator / mode.RefreshRate.Denominator << " Hz";
+    }
+}
+
 egl::Error Renderer11::initialize()
 {
     HRESULT result = S_OK;
@@ -585,6 +625,14 @@ egl::Error Renderer11::initialize()
         SafeRelease(dxgiDevice);
 
         IDXGIAdapter2 *dxgiAdapter2 = d3d11::DynamicCastComObject<IDXGIAdapter2>(mDxgiAdapter);
+
+        for (UINT output = 0; output < 10; ++output)
+        {
+            CheckActiveRefreshRate(dxgiAdapter2, DXGI_FORMAT_R8G8B8A8_UNORM, output);
+            CheckActiveRefreshRate(dxgiAdapter2, DXGI_FORMAT_B8G8R8A8_UNORM, output);
+            CheckActiveRefreshRate(dxgiAdapter2, DXGI_FORMAT_R10G10B10A2_UNORM, output);
+            CheckActiveRefreshRate(dxgiAdapter2, DXGI_FORMAT_R16G16B16A16_FLOAT, output);
+        }
 
         // On D3D_FEATURE_LEVEL_9_*, IDXGIAdapter::GetDesc returns "Software Adapter" for the
         // description string.
